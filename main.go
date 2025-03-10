@@ -16,14 +16,21 @@ const (
 )
 
 type Client struct {
-	Conn    net.Conn
-	Id      int
+	Conn    ChatConn
+	ID      int
 	LastMsg time.Time
+}
+
+type ChatConn interface {
+	watchConn(client Client, out chan Message)
+	writeConn(msg string) error
+	closeConn()
+	getClientIP() string
 }
 
 type Message struct {
 	Kind MsgKind
-	Conn net.Conn
+	Conn ChatConn // clients shouldnt be sending messages containing themselves, should fix
 	Txt  string
 }
 
@@ -36,15 +43,19 @@ const (
 	ServerShutdown
 )
 
-func watchConn(client Client, out chan Message) {
-	reader := bufio.NewReader(client.Conn)
+type TCPClient struct {
+	Conn net.Conn
+}
+
+func (t *TCPClient) watchConn(client Client, out chan Message) {
+	reader := bufio.NewReader(t.Conn)
 	for {
 		msg, err := reader.ReadString('\n')
 		if err != nil {
 			out <- Message{
 				Kind: DeadClient,
 				Conn: client.Conn,
-				Txt:  fmt.Sprintf("client %d has left\n", client.Id),
+				Txt:  fmt.Sprintf("client %d has left\n", client.ID),
 			}
 			break
 		}
@@ -56,7 +67,20 @@ func watchConn(client Client, out chan Message) {
 	}
 }
 
-func acceptConnections(listener net.Listener, serverChan chan Message, logOut chan string) {
+func (t *TCPClient) writeConn(msg string) error {
+	_, err := t.Conn.Write([]byte(msg))
+	return err
+}
+
+func (t *TCPClient) closeConn() {
+	t.Conn.Close()
+}
+
+func (t *TCPClient) getClientIP() string {
+	return t.Conn.RemoteAddr().(*net.TCPAddr).IP.String()
+}
+
+func acceptTCPConns(listener net.Listener, serverChan chan Message, logOut chan string) {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -64,18 +88,26 @@ func acceptConnections(listener net.Listener, serverChan chan Message, logOut ch
 		}
 		serverChan <- Message{
 			Kind: NewClient,
-			Conn: conn,
+			Conn: &TCPClient{conn},
 			Txt:  "",
 		}
 	}
 }
 
+// func watchWSConn() {
+
+// }
+
+// func acceptWSConns() {
+
+// }
+
 func msgHandler(in chan Message, up chan Message) {
-	conns := make(map[net.Conn]struct{})
+	conns := make(map[ChatConn]struct{})
 
 	sendMessages := func(up chan Message, msg string) {
 		for conn := range conns {
-			_, err := conn.Write([]byte(msg))
+			err := conn.writeConn(msg)
 			if err != nil {
 				up <- Message{Kind: DeadClient, Conn: conn, Txt: ""}
 			}
@@ -92,7 +124,7 @@ func msgHandler(in chan Message, up chan Message) {
 			go sendMessages(up, msg.Txt)
 
 		case DeadClient:
-			msg.Conn.Close()
+			msg.Conn.closeConn()
 			delete(conns, msg.Conn)
 			go sendMessages(up, msg.Txt)
 
@@ -105,7 +137,7 @@ func msgHandler(in chan Message, up chan Message) {
 }
 
 func server(msgs chan Message, logOut chan string) {
-	clients := make(map[net.Conn]Client)
+	clients := make(map[ChatConn]Client)
 	var numClients int
 
 	handlerChan := make(chan Message)
@@ -118,22 +150,22 @@ func server(msgs chan Message, logOut chan string) {
 		switch msg.Kind {
 
 		case NewClient:
-			c := Client{Conn: msg.Conn, Id: numClients, LastMsg: time.Now()}
+			c := Client{Conn: msg.Conn, ID: numClients, LastMsg: time.Now()}
 			clients[msg.Conn] = c
 			numClients++
-			go watchConn(c, msgs)
+			go c.Conn.watchConn(c, msgs)
 
-			logOut <- fmt.Sprintf("accepted %s\n", msg.Conn.RemoteAddr().(*net.TCPAddr).IP.String())
-			msg.Txt = fmt.Sprintf("user %d has joined\n", clients[msg.Conn].Id)
+			logOut <- fmt.Sprintf("accepted %s\n", msg.Conn.getClientIP())
+			msg.Txt = fmt.Sprintf("user %d has joined\n", clients[msg.Conn].ID)
 			handlerChan <- msg
 
 		case DeadClient:
-			logOut <- fmt.Sprintf("disconnected %s\n", msg.Conn.RemoteAddr().(*net.TCPAddr).IP.String())
+			logOut <- fmt.Sprintf("disconnected %s\n", msg.Conn.getClientIP())
 			delete(clients, msg.Conn)
 			handlerChan <- msg
 
 		case NewMsg:
-			newTxt := fmt.Sprintf("user %d > %s", clients[msg.Conn].Id, msg.Txt)
+			newTxt := fmt.Sprintf("user %d > %s", clients[msg.Conn].ID, msg.Txt)
 			handlerChan <- Message{
 				Kind: msg.Kind,
 				Conn: msg.Conn,
@@ -157,7 +189,7 @@ func main() {
 	serverChan := make(chan Message)
 	logChan := make(chan string)
 
-	go acceptConnections(listener, serverChan, logChan)
+	go acceptTCPConns(listener, serverChan, logChan)
 
 	go server(serverChan, logChan)
 
