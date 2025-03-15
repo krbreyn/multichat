@@ -68,6 +68,7 @@ func msgHandler(in chan Message, up chan Message) {
 		}
 	}
 
+handlerLoop:
 	for {
 		msg := <-in
 
@@ -93,6 +94,7 @@ func msgHandler(in chan Message, up chan Message) {
 			for conn := range conns {
 				conn.closeConn()
 			}
+			break handlerLoop
 		}
 	}
 }
@@ -106,6 +108,7 @@ func server(msgs chan Message, logOut chan string) {
 
 	logOut <- "started server\n"
 
+serverLoop:
 	for {
 		msg := <-msgs
 		switch msg.Kind {
@@ -142,6 +145,7 @@ func server(msgs chan Message, logOut chan string) {
 
 		case ServerShutdown:
 			handlerChan <- msg
+			break serverLoop
 		}
 	}
 }
