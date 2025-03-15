@@ -1,3 +1,3 @@
 A chat server accepting both WS, TCP, and (soon) SSH connections.
 
-![image](https://github.com/user-attachments/assets/85c13d0b-7351-4128-ae85-1feab74fbb08)
+![multichat_demo](https://github.com/user-attachments/assets/325ba4af-6b67-469b-9db3-6dae24278a3b)
