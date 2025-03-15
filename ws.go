@@ -75,6 +75,7 @@ func acceptWSConns(addr string, serverChan chan<- Message, logOut chan<- string)
 		conn, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			logOut <- fmt.Sprintf("failed to upgrade to websocket: %v\n", err)
+			return
 		}
 
 		clientIP := r.RemoteAddr
