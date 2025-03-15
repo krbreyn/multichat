@@ -1,28 +1,26 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"net"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
-// TODO - grab and print local ip on startup so you know what to connect to. also say 'localhost' for clarity
-// TODO - server client
-
 const (
-	port      = ":8080"
-	spamDelay = "1.0"
+	TCPPort = ":1337"
+	WSPort  = ":8080"
 )
 
 type Client struct {
-	Conn    ChatConn
-	ID      int
-	LastMsg time.Time
+	Conn ChatConn
+	ID   int
+	L    *rate.Limiter
 }
 
 type ChatConn interface {
-	watchConn(client Client, out chan Message)
+	watchConn(client Client, out chan<- Message)
 	writeConn(msg string) error
 	closeConn()
 	getClientIP() string
@@ -40,67 +38,9 @@ const (
 	NewClient MsgKind = iota + 1
 	DeadClient
 	NewMsg
+	NewDirectClientMsg
 	ServerShutdown
 )
-
-type TCPClient struct {
-	Conn net.Conn
-}
-
-func (t *TCPClient) watchConn(client Client, out chan Message) {
-	reader := bufio.NewReader(t.Conn)
-	for {
-		msg, err := reader.ReadString('\n')
-		if err != nil {
-			out <- Message{
-				Kind: DeadClient,
-				Conn: client.Conn,
-				Txt:  fmt.Sprintf("client %d has left\n", client.ID),
-			}
-			break
-		}
-		out <- Message{
-			Kind: NewMsg,
-			Conn: client.Conn,
-			Txt:  msg,
-		}
-	}
-}
-
-func (t *TCPClient) writeConn(msg string) error {
-	_, err := t.Conn.Write([]byte(msg))
-	return err
-}
-
-func (t *TCPClient) closeConn() {
-	t.Conn.Close()
-}
-
-func (t *TCPClient) getClientIP() string {
-	return t.Conn.RemoteAddr().(*net.TCPAddr).IP.String()
-}
-
-func acceptTCPConns(listener net.Listener, serverChan chan Message, logOut chan string) {
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			logOut <- fmt.Sprintf("%s failed to connect\n", conn.RemoteAddr().(*net.TCPAddr).IP.String())
-		}
-		serverChan <- Message{
-			Kind: NewClient,
-			Conn: &TCPClient{conn},
-			Txt:  "",
-		}
-	}
-}
-
-// func watchWSConn() {
-
-// }
-
-// func acceptWSConns() {
-
-// }
 
 func msgHandler(in chan Message, up chan Message) {
 	conns := make(map[ChatConn]struct{})
@@ -110,6 +50,17 @@ func msgHandler(in chan Message, up chan Message) {
 			err := conn.writeConn(msg)
 			if err != nil {
 				up <- Message{Kind: DeadClient, Conn: conn, Txt: ""}
+			}
+		}
+	}
+
+	sendDirectMessage := func(up chan Message, target ChatConn, msg string) {
+		for conn := range conns {
+			if conn == target {
+				err := conn.writeConn(msg)
+				if err != nil {
+					up <- Message{Kind: DeadClient, Conn: conn, Txt: ""}
+				}
 			}
 		}
 	}
@@ -131,6 +82,9 @@ func msgHandler(in chan Message, up chan Message) {
 		case NewMsg:
 			go sendMessages(up, msg.Txt)
 
+		case NewDirectClientMsg:
+			go sendDirectMessage(up, msg.Conn, msg.Txt)
+
 		}
 	}
 
@@ -140,7 +94,7 @@ func server(msgs chan Message, logOut chan string) {
 	clients := make(map[ChatConn]Client)
 	var numClients int
 
-	handlerChan := make(chan Message)
+	handlerChan := make(chan Message, 100)
 	go msgHandler(handlerChan, msgs)
 
 	logOut <- "started server\n"
@@ -150,12 +104,15 @@ func server(msgs chan Message, logOut chan string) {
 		switch msg.Kind {
 
 		case NewClient:
-			c := Client{Conn: msg.Conn, ID: numClients, LastMsg: time.Now()}
+			c := Client{
+				Conn: msg.Conn,
+				ID:   numClients,
+				L:    rate.NewLimiter(rate.Every(500*time.Millisecond), 1),
+			}
 			clients[msg.Conn] = c
 			numClients++
 			go c.Conn.watchConn(c, msgs)
 
-			logOut <- fmt.Sprintf("accepted %s\n", msg.Conn.getClientIP())
 			msg.Txt = fmt.Sprintf("user %d has joined\n", clients[msg.Conn].ID)
 			handlerChan <- msg
 
@@ -173,6 +130,9 @@ func server(msgs chan Message, logOut chan string) {
 			}
 			logOut <- newTxt
 
+		case NewDirectClientMsg:
+			handlerChan <- msg
+
 		case ServerShutdown:
 
 		}
@@ -180,16 +140,19 @@ func server(msgs chan Message, logOut chan string) {
 }
 
 func main() {
-	listener, err := net.Listen("tcp", port)
+	serverChan := make(chan Message, 100)
+	logChan := make(chan string, 100)
+
+	TCPListener, err := net.Listen("tcp", TCPPort)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("running on %s\n", port)
 
-	serverChan := make(chan Message)
-	logChan := make(chan string)
+	go acceptTCPConns(TCPListener, serverChan, logChan)
+	fmt.Printf("TCP running on %s\n", TCPPort)
 
-	go acceptTCPConns(listener, serverChan, logChan)
+	go acceptWSConns(WSPort, serverChan, logChan)
+	fmt.Printf("WS running on %s\n", WSPort)
 
 	go server(serverChan, logChan)
 
@@ -197,13 +160,3 @@ func main() {
 		fmt.Print(msg)
 	}
 }
-
-// TODO commands typed into server console
-// func handleServerCommand(cmd string) string {
-// 	return cmd
-// }
-
-// TODO irc-like commands that begin with /
-// func handleClientCommand(cmd string) string {
-// 	return cmd
-// }
