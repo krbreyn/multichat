@@ -3,6 +3,9 @@ package main
 import (
 	"fmt"
 	"net"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -85,9 +88,13 @@ func msgHandler(in chan Message, up chan Message) {
 		case NewDirectClientMsg:
 			go sendDirectMessage(up, msg.Conn, msg.Txt)
 
+		case ServerShutdown:
+			sendMessages(up, msg.Txt)
+			for conn := range conns {
+				conn.closeConn()
+			}
 		}
 	}
-
 }
 
 func server(msgs chan Message, logOut chan string) {
@@ -134,7 +141,7 @@ func server(msgs chan Message, logOut chan string) {
 			handlerChan <- msg
 
 		case ServerShutdown:
-
+			handlerChan <- msg
 		}
 	}
 }
@@ -156,7 +163,26 @@ func main() {
 
 	go server(serverChan, logChan)
 
-	for msg := range logChan {
-		fmt.Print(msg)
-	}
+	sigs := make(chan os.Signal, 1)
+	done := make(chan bool, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigs
+		serverChan <- Message{
+			Kind: ServerShutdown,
+			Conn: nil,
+			Txt:  "The server is shutting down now!\n",
+		}
+		done <- true
+	}()
+
+	go func() {
+		for msg := range logChan {
+			fmt.Print(msg)
+		}
+	}()
+
+	<-done
+	time.Sleep(100 * time.Millisecond)
 }
