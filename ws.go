@@ -75,6 +75,8 @@ func acceptWSConns(addr string, serverChan chan<- Message, logOut chan<- string)
 		conn, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			logOut <- fmt.Sprintf("failed to upgrade to websocket: %v\n", err)
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte("You did something wrong!"))
 			return
 		}
 
