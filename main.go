@@ -158,6 +158,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	defer TCPListener.Close()
 
 	go acceptTCPConns(TCPListener, serverChan, logChan)
 	fmt.Printf("TCP running on %s\n", TCPPort)
