@@ -3,13 +3,15 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"time"
 )
 
 type TCPClient struct {
-	Conn net.Conn
+	Conn io.ReadWriteCloser
+	IP   string
 }
 
 func (c *TCPClient) watchConn(client Client, out chan<- Message) {
@@ -19,6 +21,7 @@ func (c *TCPClient) watchConn(client Client, out chan<- Message) {
 
 	for {
 		msg, err := reader.ReadString('\n')
+
 		if err != nil {
 			out <- Message{
 				Kind: DeadClient,
@@ -32,13 +35,7 @@ func (c *TCPClient) watchConn(client Client, out chan<- Message) {
 			continue
 		}
 
-		if client.L.Allow() {
-			out <- Message{
-				Kind: NewMsg,
-				Conn: client.Conn,
-				Txt:  msg,
-			}
-		} else {
+		if !client.L.Allow() {
 			if time.Since(lastRateLimitMessage) > rateLimitPeriod {
 				lastRateLimitMessage = time.Now()
 				out <- Message{
@@ -47,6 +44,13 @@ func (c *TCPClient) watchConn(client Client, out chan<- Message) {
 					Txt:  fmt.Sprintln("You are being rate limited!"),
 				}
 			}
+			continue
+		}
+
+		out <- Message{
+			Kind: NewMsg,
+			Conn: client.Conn,
+			Txt:  msg,
 		}
 	}
 }
@@ -61,17 +65,20 @@ func (c *TCPClient) closeConn() {
 }
 
 func (c *TCPClient) getClientIP() string {
-	return c.Conn.RemoteAddr().(*net.TCPAddr).IP.String()
+	return c.IP
 }
 
 func acceptTCPConns(listener net.Listener, serverChan chan<- Message, logOut chan<- string) {
 	for {
 		conn, err := listener.Accept()
+		c_ip := conn.RemoteAddr().(*net.TCPAddr).IP.String()
+
 		if err != nil {
-			logOut <- fmt.Sprintf("%s failed to connect\n", conn.RemoteAddr().(*net.TCPAddr).IP.String())
+			logOut <- fmt.Sprintf("%s failed to connect\n", c_ip)
 		}
-		tc := TCPClient{conn}
-		logOut <- fmt.Sprintf("accepted tcp conn from %s\n", tc.getClientIP())
+
+		tc := TCPClient{conn, c_ip}
+		logOut <- fmt.Sprintf("accepted tcp conn from %s\n", c_ip)
 		serverChan <- Message{
 			Kind: NewClient,
 			Conn: &tc,

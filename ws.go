@@ -11,8 +11,8 @@ import (
 )
 
 type WSClient struct {
-	Conn       *websocket.Conn
-	RemoteAddr string
+	Conn *websocket.Conn
+	IP   string
 }
 
 func (c *WSClient) watchConn(client Client, out chan<- Message) {
@@ -31,17 +31,12 @@ func (c *WSClient) watchConn(client Client, out chan<- Message) {
 		}
 
 		msg := string(bmsg)
+
 		if strings.TrimSpace(msg) == "" {
 			continue
 		}
 
-		if client.L.Allow() {
-			out <- Message{
-				Kind: NewMsg,
-				Conn: client.Conn,
-				Txt:  msg + "\n",
-			}
-		} else {
+		if !client.L.Allow() {
 			if time.Since(lastRateLimitMessage) > rateLimitPeriod {
 				lastRateLimitMessage = time.Now()
 				out <- Message{
@@ -50,6 +45,13 @@ func (c *WSClient) watchConn(client Client, out chan<- Message) {
 					Txt:  "You are being rate limited!",
 				}
 			}
+			continue
+		}
+
+		out <- Message{
+			Kind: NewMsg,
+			Conn: client.Conn,
+			Txt:  msg + "\n",
 		}
 	}
 
@@ -67,7 +69,7 @@ func (c *WSClient) closeConn() {
 }
 
 func (c *WSClient) getClientIP() string {
-	return c.RemoteAddr
+	return c.IP
 }
 
 func acceptWSConns(addr string, serverChan chan<- Message, logOut chan<- string) {
@@ -83,8 +85,8 @@ func acceptWSConns(addr string, serverChan chan<- Message, logOut chan<- string)
 		clientIP := r.RemoteAddr
 
 		wsClient := &WSClient{
-			Conn:       conn,
-			RemoteAddr: clientIP,
+			Conn: conn,
+			IP:   clientIP,
 		}
 
 		serverChan <- Message{
