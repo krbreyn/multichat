@@ -64,7 +64,7 @@ func (c *TCPClient) closeConn() {
 	c.Conn.Close()
 }
 
-func (c *TCPClient) getClientIP() string {
+func (c *TCPClient) getIP() string {
 	return c.IP
 }
 

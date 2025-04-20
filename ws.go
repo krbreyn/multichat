@@ -68,7 +68,7 @@ func (c *WSClient) closeConn() {
 	_ = c.Conn.Close(websocket.StatusNormalClosure, "connection closed")
 }
 
-func (c *WSClient) getClientIP() string {
+func (c *WSClient) getIP() string {
 	return c.IP
 }
 

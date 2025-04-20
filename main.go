@@ -26,7 +26,7 @@ type ChatConn interface {
 	watchConn(client Client, out chan<- Message)
 	writeConn(msg string) error
 	closeConn()
-	getClientIP() string
+	getIP() string
 }
 
 type Message struct {
@@ -58,17 +58,12 @@ func msgHandler(in chan Message, up chan Message) {
 	}
 
 	sendDirectMessage := func(up chan Message, target ChatConn, msg string) {
-		for conn := range conns {
-			if conn == target {
-				err := conn.writeConn(msg)
-				if err != nil {
-					up <- Message{Kind: DeadClient, Conn: conn, Txt: ""}
-				}
-			}
+		err := target.writeConn(msg)
+		if err != nil {
+			up <- Message{Kind: DeadClient, Conn: target, Txt: ""}
 		}
 	}
 
-handlerLoop:
 	for {
 		msg := <-in
 
@@ -94,7 +89,7 @@ handlerLoop:
 			for conn := range conns {
 				conn.closeConn()
 			}
-			break handlerLoop
+			return
 		}
 	}
 }
@@ -108,7 +103,6 @@ func server(msgs chan Message, logOut chan string) {
 
 	logOut <- "started server\n"
 
-serverLoop:
 	for {
 		msg := <-msgs
 		switch msg.Kind {
@@ -127,7 +121,7 @@ serverLoop:
 			handlerChan <- msg
 
 		case DeadClient:
-			logOut <- fmt.Sprintf("disconnected %s\n", msg.Conn.getClientIP())
+			logOut <- fmt.Sprintf("disconnected %s\n", msg.Conn.getIP())
 			delete(clients, msg.Conn)
 			handlerChan <- msg
 
@@ -145,7 +139,7 @@ serverLoop:
 
 		case ServerShutdown:
 			handlerChan <- msg
-			break serverLoop
+			return
 		}
 	}
 }
@@ -172,6 +166,7 @@ func main() {
 	done := make(chan bool, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
+	// Watch for process shutdown signal.
 	go func() {
 		<-sigs
 		serverChan <- Message{
@@ -182,6 +177,7 @@ func main() {
 		done <- true
 	}()
 
+	// Print log items as they come.
 	go func() {
 		for msg := range logChan {
 			fmt.Print(msg)
@@ -189,5 +185,8 @@ func main() {
 	}()
 
 	<-done
+	// Give some time for the server to shut-down.
+	// This should be replaced by communication from the server itself
+	// saying that it has finished shutting down.
 	time.Sleep(100 * time.Millisecond)
 }
